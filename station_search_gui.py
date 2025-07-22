@@ -198,7 +198,7 @@ def normalize_search_string(text: str, include_katakana: bool = False) -> str:
 
 def find_character_positions_cross(df: pd.DataFrame, search_string: str, include_katakana: bool = False) -> Dict:
     """
-    複数駅名を使った縦クロスワード作成のため、各文字の位置一致を判定
+    複数駅名を使った縦クロスワード検索のため、各文字の位置一致を判定
     """
     if not search_string:
         return {"cross_possible": False, "position_groups": {}, "matching_stations": []}
@@ -270,7 +270,7 @@ def find_character_positions_cross(df: pd.DataFrame, search_string: str, include
 
 def find_character_positions_cross_with_priority(df_all: pd.DataFrame, df_selected: pd.DataFrame, search_string: str, include_katakana: bool = False) -> Dict:
     """
-    文字別優先検索を行う縦クロスワード作成関数
+    文字別優先検索を行う縦クロスワード検索関数
     各文字について、選択地域内の駅を優先的に使用し、なければ全国から選択
     該当する全ての駅を返す（全ての位置での組み合わせ）
     """
@@ -546,7 +546,7 @@ def create_download_csv(df: pd.DataFrame) -> str:
 
 
 def main():
-    st.title("駅名縦クロスワード作成ツール")
+    st.title("駅名縦クロスワード検索ツール")
     
     # データソースの表示
     st.markdown("📊 **データソース**: [駅データ.jp（ekidata.jp）](https://ekidata.jp/) のデータを使用")
@@ -645,7 +645,7 @@ def main():
     search_input = st.text_input(
         "検索文字列を入力してください（ひらがな・漢字対応、最大20文字）",
         max_chars=20,
-        help="複数駅名で縦クロスワードを作成）"
+        help="複数駅名で縦クロスワードを検索）"
     )
     
     # カタカナ処理の切り替え
@@ -694,7 +694,7 @@ def main():
     st.subheader("3. 検索結果")
     
     if not results.empty:
-        st.success(f"クロスワード作成可能: {len(results):,} 駅でパターン発見")
+        st.success(f"クロスワード検索可能: {len(results):,} 駅でパターン発見")
         
         # 選択中の都道府県を表示（既に上部で表示済みのため削除）
         
@@ -778,10 +778,10 @@ def main():
             )
     else:
         if search_input or selected_options:
-            st.warning("指定条件で縦クロスワードが作成できません")
+            st.warning("指定条件で縦クロスワードが検索できません")
             st.info("💡 ヒント: 検索文字列の各文字が同じ位置（何文字目）にある駅の組み合わせが必要です")
         else:
-            st.info("検索文字列を入力して縦クロスワードを作成してください")
+            st.info("検索文字列を入力して縦クロスワードを検索してください")
 
 
 if __name__ == "__main__":

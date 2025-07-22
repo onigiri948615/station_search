@@ -68,13 +68,28 @@ pip install streamlit pandas jaconv
 - `eki.csv` - 路線・事業者データ
 - `master_data.py` - 地方区分マッピング
 
-### 3. アプリケーションの起動
+### 3. 高速インデックスの作成（推奨）
+
+検索速度を大幅に向上させるため、事前にインデックスを作成できます：
+
+```bash
+python create_index.py
+```
+
+これにより以下のファイルが生成されます：
+- `station_hiragana_index.json` - ひらがな/漢字検索用インデックス
+- `station_katakana_index.json` - カタカナ検索用インデックス  
+- `station_data_indexed.csv` - 軽量化された駅データ
+
+### 4. アプリケーションの起動
 
 ```bash
 streamlit run station_search_gui.py
 ```
 
 ブラウザが自動で開き、`http://localhost:8501` でアプリケーションにアクセスできます。
+
+インデックスファイルが存在する場合、自動的に高速検索モードで動作します。
 
 ## 使用方法
 

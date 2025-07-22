@@ -5,7 +5,80 @@ import re
 import jaconv
 from typing import List, Dict, Tuple, Optional
 import io
+import os
 from master_data import LINE_MAPPING, OPERATOR_MAPPING, REGION_MAPPING, PREFECTURE_CODE_TO_NAME
+
+
+@st.cache_data
+def load_precomputed_index():
+    """
+    事前計算されたインデックスファイルを読み込み
+    
+    Returns:
+        tuple: (hiragana_index, katakana_index, df) or (None, None, None)
+    """
+    try:
+        # インデックスファイルの存在確認
+        hiragana_file = 'station_hiragana_index.json'
+        katakana_file = 'station_katakana_index.json'
+        data_file = 'station_data_indexed.csv'
+        
+        if not all(os.path.exists(f) for f in [hiragana_file, katakana_file, data_file]):
+            return None, None, None
+        
+        # インデックス読み込み
+        with open(hiragana_file, 'r', encoding='utf-8') as f:
+            hiragana_index = json.load(f)
+        
+        with open(katakana_file, 'r', encoding='utf-8') as f:
+            katakana_index = json.load(f)
+        
+        # 駅データ読み込み
+        df = pd.read_csv(data_file)
+        
+        # キーを整数に変換（JSONは文字列キーになるため）
+        hiragana_index = {int(k): v for k, v in hiragana_index.items()}
+        katakana_index = {int(k): v for k, v in katakana_index.items()}
+        
+        return hiragana_index, katakana_index, df
+        
+    except Exception as e:
+        st.warning(f"インデックスファイルの読み込みに失敗: {e}")
+        return None, None, None
+
+
+def find_stations_by_index(station_index: Dict, char: str, position: int, df: pd.DataFrame) -> List[Dict]:
+    """
+    インデックスを使用した高速駅検索
+    
+    Args:
+        station_index: 事前作成されたインデックス
+        char: 検索文字
+        position: 位置
+        df: 駅データ
+    
+    Returns:
+        該当する駅の辞書リスト
+    """
+    if position not in station_index or char not in station_index[position]:
+        return []
+    
+    # インデックスから駅IDを取得し、対応する駅データを返す
+    station_indices = station_index[position][char]
+    matching_stations = []
+    
+    for idx in station_indices:
+        if idx < len(df):
+            station_data = df.iloc[idx].to_dict()
+            # 対応文字は元の駅名から取得
+            station_name = station_data['station_name']
+            if position < len(station_name):
+                station_data['actual_char'] = station_name[position]
+            else:
+                station_data['actual_char'] = char
+            matching_stations.append(station_data)
+    
+    return matching_stations
 
 
 
@@ -273,6 +346,108 @@ def find_all_chars_at_position(df: pd.DataFrame, char: str, position: int, inclu
     return matching_stations
 
 
+def search_and_analyze_fast(df: pd.DataFrame, search_string: str, selected_prefecture_codes: List[int], hiragana_index: Dict, katakana_index: Dict, include_katakana: bool = False) -> pd.DataFrame:
+    """
+    インデックスを使用した高速縦クロスワード検索と分析
+    """
+    if df.empty:
+        return pd.DataFrame()
+    
+    # 検索文字列の正規化
+    normalized_search = normalize_search_string(search_string, include_katakana)
+    
+    if not normalized_search:
+        return pd.DataFrame()
+    
+    # 使用するインデックスを選択
+    station_index = katakana_index if include_katakana else hiragana_index
+    
+    # 選択地域のデータと全国データを準備
+    if selected_prefecture_codes:
+        df_selected = df[df['pref_cd'].isin(selected_prefecture_codes)].copy()
+    else:
+        df_selected = pd.DataFrame()
+    
+    all_position_results = []
+    
+    # 各位置について、全文字が揃うかチェック
+    for pos in range(20):  # 最大20文字の駅名を想定
+        all_matching_stations = []
+        all_chars_found = True
+        
+        for char_index, char in enumerate(normalized_search):
+            char_stations = []
+            
+            # 検索文字を適切に正規化
+            if include_katakana:
+                search_char = char  # カタカナモードでは変換しない
+            else:
+                search_char = jaconv.kata2hira(char)  # ひらがなモードではひらがなに変換
+            
+            # まず選択地域内で探す
+            if not df_selected.empty:
+                selected_stations = find_stations_by_index(station_index, search_char, pos, df_selected)
+                char_stations.extend(selected_stations)
+            
+            # 全国で探す（重複は後で除去）
+            all_stations = find_stations_by_index(station_index, search_char, pos, df)
+            
+            # 重複を除去しつつ追加
+            existing_keys = {(s['station_name'], s.get('pref_cd', 0)) for s in char_stations}
+            for station in all_stations:
+                key = (station['station_name'], station.get('pref_cd', 0))
+                if key not in existing_keys:
+                    char_stations.append(station)
+            
+            if char_stations:
+                all_matching_stations.append((char, char_stations))  # 元の文字を使用
+            else:
+                all_chars_found = False
+                break
+        
+        # この位置で全文字が揃った場合は結果に追加
+        if all_chars_found and len(all_matching_stations) == len(normalized_search):
+            all_position_results.append({
+                "position": pos,
+                "matching_stations": all_matching_stations
+            })
+    
+    # 結果があれば返す
+    if all_position_results:
+        # マッチした駅の情報を整理
+        result_rows = []
+        
+        for position_result in all_position_results:
+            position = position_result['position']
+            matching_stations = position_result['matching_stations']
+            
+            for char_index, (char, stations_list) in enumerate(matching_stations):
+                for station_data in stations_list:
+                    # 検索範囲を決定
+                    station_pref_cd = station_data.get('pref_cd', 0)
+                    if selected_prefecture_codes and station_pref_cd in selected_prefecture_codes:
+                        search_scope = '🔵 選択地域内'
+                    else:
+                        search_scope = '🔴 全国'
+                    
+                    # 対応文字は元の駅名から取得
+                    display_char = station_data.get('actual_char', char)
+                    
+                    result_rows.append({
+                        'station_name': station_data['station_name'],
+                        'prefecture': station_data.get('prefecture', '不明'),
+                        'operator_name': station_data.get('operator_name', '不明'),
+                        'route_name': station_data.get('route_name', '不明'),
+                        'search_char': display_char,
+                        'char_position': position + 1,  # 1ベースに変換
+                        'search_scope': search_scope
+                    })
+        
+        return pd.DataFrame(result_rows)
+    else:
+        return pd.DataFrame()
+
+
 def search_and_analyze(df: pd.DataFrame, search_string: str, selected_prefecture_codes: List[int], include_katakana: bool = False) -> pd.DataFrame:
     """
     複数駅名を使った縦クロスワード検索と分析（文字別優先順位付き）
@@ -397,8 +572,17 @@ def main():
     st.warning("""
     ⚠️ **重要な注意事項**
     - 検索結果通りに駅名が印字されるとは限りません。
-    - 鉄道会社によって，印字の方法が異なる場合があります。
+    - 鉄道会社によって、印字の方法が異なる場合があります。
     """)
+    
+    # インデックスファイルの読み込み試行
+    hiragana_index, katakana_index, indexed_df = load_precomputed_index()
+    use_fast_search = hiragana_index is not None
+    
+    if use_fast_search:
+        st.success("🚀 高速インデックスを使用します")
+    else:
+        st.info("💡 高速化のため create_index.py を実行してインデックスを作成してください")
     
     # カスタムCSS for 検索範囲の視覚的区別
     st.markdown("""
@@ -450,10 +634,22 @@ def main():
         )
     
     # データ読み込み
-    if uploaded_file is not None:
-        df = load_station_data(uploaded_file)
+    if use_fast_search and uploaded_file is None:
+        # インデックス使用時は事前処理済みデータを使用
+        df = indexed_df.copy()
+        # 必要な列が不足している場合は補完
+        if 'prefecture' not in df.columns:
+            df['prefecture'] = df['pref_cd'].map(PREFECTURE_CODE_TO_NAME)
+        if 'route_name' not in df.columns:
+            df['route_name'] = "不明"
+        if 'operator_name' not in df.columns:
+            df['operator_name'] = "不明"
     else:
-        df = load_station_data()
+        # 通常のデータ読み込み
+        if uploaded_file is not None:
+            df = load_station_data(uploaded_file)
+        else:
+            df = load_station_data()
     
     if df.empty:
         st.warning("データが読み込まれていません。")
@@ -502,7 +698,11 @@ def main():
         st.session_state.prev_selected = selected_options
         
         with st.spinner('検索中...'):
-            results = search_and_analyze(df, search_input, selected_prefecture_codes, include_katakana)
+            # 高速検索かどうかで処理を分岐
+            if use_fast_search and uploaded_file is None:
+                results = search_and_analyze_fast(df, search_input, selected_prefecture_codes, hiragana_index, katakana_index, include_katakana)
+            else:
+                results = search_and_analyze(df, search_input, selected_prefecture_codes, include_katakana)
             st.session_state.search_results = results
     
     # 検索結果表示

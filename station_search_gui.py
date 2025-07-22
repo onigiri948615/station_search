@@ -368,84 +368,64 @@ def search_and_analyze_fast(df: pd.DataFrame, search_string: str, selected_prefe
     else:
         df_selected = pd.DataFrame()
     
-    all_position_results = []
+    result_rows = []
     
-    # 各位置について、全文字が揃うかチェック
+    # 各位置について、縦クロスワードの可能性をチェック
     for pos in range(20):  # 最大20文字の駅名を想定
-        all_matching_stations = []
-        all_chars_found = True
+        # 各文字ごとに該当する駅のリストを取得
+        char_station_lists = []
         
         for char_index, char in enumerate(normalized_search):
-            char_stations = []
-            
             # 検索文字を適切に正規化
             if include_katakana:
                 search_char = char  # カタカナモードでは変換しない
             else:
                 search_char = jaconv.kata2hira(char)  # ひらがなモードではひらがなに変換
             
+            # この位置にこの文字を持つ駅を探す
+            char_stations = []
+            
             # まず選択地域内で探す
             if not df_selected.empty:
                 selected_stations = find_stations_by_index(station_index, search_char, pos, df_selected)
-                char_stations.extend(selected_stations)
+                for station in selected_stations:
+                    station['search_scope'] = '🔵 選択地域内'
+                    station['search_char'] = char  # 元の検索文字を保存
+                    char_stations.append(station)
             
-            # 全国で探す（重複は後で除去）
+            # 全国で探す（選択地域以外）
             all_stations = find_stations_by_index(station_index, search_char, pos, df)
-            
-            # 重複を除去しつつ追加
             existing_keys = {(s['station_name'], s.get('pref_cd', 0)) for s in char_stations}
+            
             for station in all_stations:
                 key = (station['station_name'], station.get('pref_cd', 0))
                 if key not in existing_keys:
+                    station['search_scope'] = '🔴 全国'
+                    station['search_char'] = char  # 元の検索文字を保存
                     char_stations.append(station)
             
-            if char_stations:
-                all_matching_stations.append((char, char_stations))  # 元の文字を使用
-            else:
-                all_chars_found = False
+            # この文字に対応する駅がない場合は、この位置では縦クロスワード不可能
+            if not char_stations:
                 break
+                
+            char_station_lists.append(char_stations)
         
-        # この位置で全文字が揃った場合は結果に追加
-        if all_chars_found and len(all_matching_stations) == len(normalized_search):
-            all_position_results.append({
-                "position": pos,
-                "matching_stations": all_matching_stations
-            })
-    
-    # 結果があれば返す
-    if all_position_results:
-        # マッチした駅の情報を整理
-        result_rows = []
-        
-        for position_result in all_position_results:
-            position = position_result['position']
-            matching_stations = position_result['matching_stations']
-            
-            for char_index, (char, stations_list) in enumerate(matching_stations):
-                for station_data in stations_list:
-                    # 検索範囲を決定
-                    station_pref_cd = station_data.get('pref_cd', 0)
-                    if selected_prefecture_codes and station_pref_cd in selected_prefecture_codes:
-                        search_scope = '🔵 選択地域内'
-                    else:
-                        search_scope = '🔴 全国'
-                    
-                    # 対応文字は元の駅名から取得
-                    display_char = station_data.get('actual_char', char)
-                    
+        # 全ての文字で駅が見つかった場合のみ結果に追加
+        if len(char_station_lists) == len(normalized_search):
+            # 各文字ごとに1つずつ駅を選んで結果に追加
+            for char_index, stations_for_char in enumerate(char_station_lists):
+                for station_data in stations_for_char:
                     result_rows.append({
                         'station_name': station_data['station_name'],
                         'prefecture': station_data.get('prefecture', '不明'),
                         'operator_name': station_data.get('operator_name', '不明'),
                         'route_name': station_data.get('route_name', '不明'),
-                        'search_char': display_char,
-                        'char_position': position + 1,  # 1ベースに変換
-                        'search_scope': search_scope
+                        'search_char': station_data.get('search_char', normalized_search[char_index]),
+                        'char_position': pos + 1,  # 1ベースに変換
+                        'search_scope': station_data.get('search_scope', '🔴 全国')
                     })
-        
-        return pd.DataFrame(result_rows)
-    else:
-        return pd.DataFrame()
+    
+    return pd.DataFrame(result_rows)
 
 
 def search_and_analyze(df: pd.DataFrame, search_string: str, selected_prefecture_codes: List[int], include_katakana: bool = False) -> pd.DataFrame:
@@ -730,9 +710,6 @@ def main():
             - <span style="background-color: #e3f2fd; padding: 2px 8px; border-radius: 3px;">🔵 選択地域内</span>
             - <span style="background-color: #fff3e0; padding: 2px 8px; border-radius: 3px;">🔴 全国</span>
             
-            **📝 表示について**
-            - 「対応文字」列の文字は、駅名データに記録されている元の文字種で表示されます
-            - 検索設定に関わらず、実際の表示文字が検索文字と異なる場合があります
             """, unsafe_allow_html=True)
             
             positions = sorted(results['char_position'].unique())
